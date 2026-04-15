@@ -8,6 +8,7 @@ BOT_TOKEN = "8651000393:AAEF3Gkl7AAguYfz5rP7xLI359eBo5jexqE"
 NODE_SECRET = "secret_key_123"
 PORT = int(os.environ.get("PORT", 8080))
 RENDER_URL = "https://backendvpn.onrender.com"
+VPN_PORT = 34523
 
 dp = Dispatcher()
 bot = Bot(token=BOT_TOKEN)
@@ -28,31 +29,40 @@ async def sync_handler(request):
 async def sub_handler(request):
     token = request.match_info.get('token')
     user = next((u for u in state["users"].values() if u['token'] == token), None)
-    if not user or not state["keys"]: return web.Response(status=404, text="Offline")
-    vless = (f"vless://{user['uuid']}@{state['ip']}:443?encryption=none&security=reality"
-             f"&sni=google.com&fp=chrome&pbk={state['keys']['public']}"
-             f"&sid={state['keys']['shortId']}&flow=xtls-rprx-vision#MyHomeVPN")
+    if not user or not state["keys"]: return web.Response(status=404, text="Node Offline")
+    vless = (f"vless://{user['uuid']}@{state['ip']}:{VPN_PORT}?encryption=none&security=reality"
+             f"&sni=dl.google.com&fp=chrome&pbk={state['keys']['public']}"
+             f"&sid={state['keys']['shortId']}&flow=xtls-rprx-vision#HomeVPN")
     return web.Response(text=base64.b64encode((vless + "\n").encode()).decode())
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     kb = InlineKeyboardBuilder()
     kb.row(types.InlineKeyboardButton(text="🚀 Получить VPN", callback_data="get_vpn"))
-    await message.answer("Master-Mirror VPN System", reply_markup=kb.as_markup())
+    await message.answer("Система готова. Нажми кнопку для генерации подписки.", reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "get_vpn")
 async def handle_get_vpn(callback: types.CallbackQuery):
     tg_id = callback.from_user.id
+    
     if tg_id in state["users"]:
         user = state["users"][tg_id]
         link = f"{RENDER_URL}/sub/{user['token']}"
-        await callback.message.edit_text(f"Твоя ссылка:\n`{link}`", parse_mode="Markdown")
-    elif any(u['tg_id'] == tg_id for u in state["pending"]):
-        await callback.answer("Регистрация в очереди... Подожди 15 секунд.", show_alert=True)
-    else:
-        new_u = {"tg_id": tg_id, "uuid": str(uuid.uuid4()), "token": uuid.uuid4().hex[:16]}
-        state["pending"].append(new_u)
-        await callback.answer("Создаю ключ... Подожди 15-20 секунд и нажми еще раз.", show_alert=True)
+        return await callback.message.edit_text(f"Твоя ссылка:\n`{link}`", parse_mode="Markdown")
+
+    new_u = {"tg_id": tg_id, "uuid": str(uuid.uuid4()), "token": uuid.uuid4().hex[:16]}
+    state["pending"].append(new_u)
+    
+    await callback.message.edit_text("⏳ **Генерация подписки...**\nПожалуйста, подождите, пока основная машина подтвердит ваш ключ (около 20 сек).", parse_mode="Markdown")
+
+    for _ in range(12):
+        await asyncio.sleep(5)
+        if tg_id in state["users"]:
+            user = state["users"][tg_id]
+            link = f"{RENDER_URL}/sub/{user['token']}"
+            return await callback.message.edit_text(f"✅ **Готово!**\nТвоя ссылка для импорта:\n`{link}`", parse_mode="Markdown")
+    
+    await callback.message.edit_text("❌ Ошибка: Основная машина не ответила вовремя. Попробуйте позже.")
 
 async def startup(app):
     asyncio.create_task(dp.start_polling(bot))
